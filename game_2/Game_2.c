@@ -1,15 +1,19 @@
-#include "Game_2.h”
+#include "Game_2.h"
 #include "InputHandler.h"
 #include "Menu.h"
 #include "LCD.h"
 #include "Buzzer.h"
+#include "Joystick.h"
 #include "stm32l4xx_hal.h"
 #include <stdio.h>
 
 extern ST7789V2_cfg_t cfg0;
 extern Buzzer_cfg_t buzzer_cfg;
+extern Joystick_cfg_t joystick_cfg;
+extern Joystick_t joystick_data;
 
 #define GAME2_FRAME_TIME_MS 50
+#define MOVE_DELAY_MS 180
 
 #define LANE_LEFT_X   45
 #define LANE_MID_X    105
@@ -21,16 +25,15 @@ extern Buzzer_cfg_t buzzer_cfg;
 #define START_Y       70
 #define END_Y         165
 
-#define BLACK 0
 #define WHITE 1
 #define RED   2
 #define GREEN 3
-#define BLUE  4
 #define BROWN 12
 #define GOLD  10
 
 static uint32_t frame_counter = 0;
 static uint32_t score = 0;
+static uint32_t last_move_tick = 0;
 
 static int player_lane = 1;
 
@@ -48,8 +51,6 @@ static int speed_message_timer = 0;
 
 static int game_over = 0;
 
-/* ================= PLAYER ================= */
-
 static const uint32_t player_bitmap[32] = {
     0x00000000,0x00000000,0x001E0000,0x003F0000,
     0x007F8000,0x003F0000,0x001E0000,0x003F0000,
@@ -61,7 +62,6 @@ static const uint32_t player_bitmap[32] = {
     0x00000000,0x00000000,0x00000000,0x00000000
 };
 
-/* ================= WOOD BOX ================= */
 
 static const uint32_t crate_bitmap[32] = {
     0x00000000,0x00000000,0x00000000,0x00000000,
@@ -74,7 +74,6 @@ static const uint32_t crate_bitmap[32] = {
     0x00000000,0x00000000,0x00000000,0x00000000
 };
 
-/* ================= MONSTER ================= */
 
 static const uint32_t monster_bitmap[2][32] = {
 {
@@ -99,7 +98,6 @@ static const uint32_t monster_bitmap[2][32] = {
 }
 };
 
-/* ================= COIN ================= */
 
 static const uint16_t coin_bitmap[16] = {
     0b0000000000000000,
@@ -135,7 +133,10 @@ static void draw_bitmap_32x32(const uint32_t bitmap[32], int x, int y, uint8_t c
         {
             if (bitmap[row] & (1UL << (31 - col)))
             {
-                LCD_Set_Pixel(x + col, y + row, colour);
+                if (x + col >= 0 && x + col < 240 && y + row >= 0 && y + row < 240)
+                {
+                    LCD_Set_Pixel(x + col, y + row, colour);
+                }
             }
         }
     }
@@ -149,7 +150,10 @@ static void draw_bitmap_16x16(const uint16_t bitmap[16], int x, int y, uint8_t c
         {
             if (bitmap[row] & (1U << (15 - col)))
             {
-                LCD_Set_Pixel(x + col, y + row, colour);
+                if (x + col >= 0 && x + col < 240 && y + row >= 0 && y + row < 240)
+                {
+                    LCD_Set_Pixel(x + col, y + row, colour);
+                }
             }
         }
     }
@@ -159,6 +163,7 @@ static void game_reset(void)
 {
     frame_counter = 0;
     score = 0;
+    last_move_tick = HAL_GetTick();
 
     player_lane = 1;
 
@@ -234,7 +239,6 @@ static void draw_coin(void)
 static void draw_monster(void)
 {
     int x = lane_to_x(player_lane);
-
     int frame = (frame_counter / 6) % 2;
 
     draw_bitmap_32x32(monster_bitmap[frame], x - 16, MONSTER_Y - 16, RED);
@@ -249,16 +253,12 @@ static void draw_game(void)
     LCD_printString("TEMPLE DASH", 45, 45, WHITE, 2);
 
     draw_road();
-
     draw_coin();
-
     draw_obstacle();
-
     draw_player();
-
     draw_monster();
 
-    LCD_printString("BT3 Menu", 55, 225, WHITE, 1);
+    LCD_printString("BT6 Menu", 55, 225, WHITE, 1);
 
     LCD_Refresh(&cfg0);
 }
@@ -278,35 +278,47 @@ static void draw_game_over(void)
     sprintf(text, "Stage:%d", stage);
     LCD_printString(text, 60, 195, WHITE, 2);
 
-    LCD_printString("BT1 Restart", 30, 220, WHITE, 1);
-    LCD_printString("BT3 Menu", 130, 220, WHITE, 1);
+    LCD_printString("BT7 Restart", 30, 220, WHITE, 1);
+    LCD_printString("BT6 Menu", 130, 220, WHITE, 1);
 
     LCD_Refresh(&cfg0);
 }
 
 static void update_input(void)
 {
-    if (current_input.btn7_pressed)
-    {
-        if (player_lane > 0)
-        {
-            player_lane--;
+    uint32_t now = HAL_GetTick();
 
-            buzzer_tone(&buzzer_cfg, 1000, 20);
-            HAL_Delay(30);
-            buzzer_off(&buzzer_cfg);
+    if ((now - last_move_tick) >= MOVE_DELAY_MS && joystick_data.direction != CENTRE)
+    {
+        if (joystick_data.direction == W ||
+            joystick_data.direction == NW ||
+            joystick_data.direction == SW)
+        {
+            if (player_lane > 0)
+            {
+                player_lane--;
+
+                buzzer_tone(&buzzer_cfg, 1000, 20);
+                HAL_Delay(30);
+                buzzer_off(&buzzer_cfg);
+
+                last_move_tick = now;
+            }
         }
-    }
-
-    if (current_input.btn2_pressed)
-    {
-        if (player_lane < 2)
+        else if (joystick_data.direction == E ||
+                 joystick_data.direction == NE ||
+                 joystick_data.direction == SE)
         {
-            player_lane++;
+            if (player_lane < 2)
+            {
+                player_lane++;
 
-            buzzer_tone(&buzzer_cfg, 1000, 20);
-            HAL_Delay(30);
-            buzzer_off(&buzzer_cfg);
+                buzzer_tone(&buzzer_cfg, 1000, 20);
+                HAL_Delay(30);
+                buzzer_off(&buzzer_cfg);
+
+                last_move_tick = now;
+            }
         }
     }
 }
@@ -314,7 +326,6 @@ static void update_input(void)
 static void next_stage(void)
 {
     stage++;
-
     coins_collected = 0;
 
     coin_score += 5;
@@ -340,7 +351,6 @@ static void update_coin(void)
         if (coin_lane == player_lane)
         {
             score += coin_score;
-
             coins_collected++;
 
             buzzer_tone(&buzzer_cfg, 1500, 20);
@@ -407,6 +417,7 @@ MenuState Game2_Run(void)
         uint32_t frame_start = HAL_GetTick();
 
         Input_Read();
+        Joystick_Read(&joystick_cfg, &joystick_data);
 
         if (current_input.btn6_pressed)
         {
@@ -417,9 +428,7 @@ MenuState Game2_Run(void)
         if (!game_over)
         {
             update_input();
-
             update_coin();
-
             update_obstacle();
 
             frame_counter++;
@@ -430,7 +439,7 @@ MenuState Game2_Run(void)
         {
             draw_game_over();
 
-            if (current_input.btn3_pressed)
+            if (current_input.btn7_pressed)
             {
                 game_reset();
             }
