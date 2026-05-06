@@ -16,31 +16,32 @@ extern PWM_cfg_t pwm_cfg_2;   // LED PWM 2 control
 extern Buzzer_cfg_t buzzer_cfg; // Buzzer control
 extern Joystick_cfg_t joystick_cfg; // configuation joystick
 extern Joystick_t joystick_data; 
+extern volatile uint32_t g_tim6_ticks;
 
 // Frame rate for this game (in milliseconds)
-#define FPS 60
-#define GAME1_FRAME_TIME_MS (1000 / FPS)
-#define MOVE_DELAY_MS 200  // Milliseconds between movement updates
-#define GAME_TIME_MS 60000  //duration of  game round
-#define WATER_TO_GROWING_TIME_MS 2500 // The time form water state to growing state
-#define GROWING_TO_RIPE_TIME_MS 2500 //The time form growing state to ripe state
-#define SEEDED_TO_SAPLESS_TIME_MS 5000//The time form seed state to sapless
-#define RED_LED_BLINK_TIME_MS 300 //blinking interval of the red LED
-#define ERROR_MESSAGE_TIME_MS 3000// the time of error
-#define LOADING_DELAY_MS 120//The animation delay
+#define Fps 60
+#define Game1_frame_time (1000 / Fps)
+#define Move_delay 200  // Milliseconds between movement updates
+#define Game_time 60000  //duration of  game round
+#define Water_to_growing_time 2500 // The time form water state to growing state
+#define Growing_to_ripe_time 2500 //The time form growing state to ripe state
+#define Seeded_to_sapless_time 5000//The time form seed state to sapless
+#define Red_led_blink_time 300 //blinking interval of the red LED
+#define Error_message_time 3000// the time of error
+#define Loading_delay 120//The animation delay
 //two buzzer sound parameter settings
-#define BUZZER_STARTUP_FREQ_HZ 1000 
-#define BUZZER_STARTUP_DURATION_MS 30
-#define BUZZER_STARTUP_DELAY_MS 50
-#define BUZZER_MODE_FREQ_HZ 1000
-#define BUZZER_MODE_DURATION_MS 50
-#define BUZZER_MODE_DELAY_MS 50
-#define BUZZER_ERROR_FREQ_HZ 700
-#define BUZZER_ERROR_DURATION_MS 70
-#define BUZZER_ERROR_DELAY_MS 40
+#define Buzzer_startup_freq 1000 
+#define Buzzer_startup_volume 30
+#define Buzzer_startup_delay 50
+#define Buzzer_mode_freq 1000
+#define Buzzer_mode_volume 50
+#define Buzzer_mode_delay 50
+#define Buzzer_error_freq 700
+#define Buzzer_error_volume 70
+#define Buzzer_error_delay 40
 //Game status variable
 static int initial_selectedrow = 0;
-static int initial_selectedcol = 0;
+static int initial_selectedcol = 0;//(0,0) repersents the middle of soil
 static int start_x = 60;
 static int start_y = 60;
 static int scale=4;
@@ -52,14 +53,14 @@ static int start_midllesoil_x=110;
 static int start_midllesoil_y=110;
 static int score=0;
 static int best_score = 0;
-volatile uint8_t game_over = 0;
 static uint32_t last_move_tick = 0;
 static const char *error_message = NULL;
 static uint32_t error_stick = 0;
 static uint32_t game_start_tick = 0;
-static uint32_t game_time = GAME_TIME_MS;
+static uint32_t game_time = Game_time;
 static uint8_t check_screen_updata= 1;
 static int last_time_left = -1;
+
 
 // create a grass Sprites
 const uint8_t GRASS[8][8] = {
@@ -171,6 +172,15 @@ typedef enum{
     ripe=4,
     sapless=5
 } soilstate;
+//Define  pointer to the different sprite
+static const uint8_t *soil_sprites[] = {
+    (const uint8_t*)Soil,          
+    (const uint8_t*)Soil_seeded,   
+    (const uint8_t*)Soil_waterd,   
+    (const uint8_t*)Soil_growing,  
+    (const uint8_t*)Soil_ripe,     
+    (const uint8_t*)Soil_sapless  
+};
 // Define the player's action mode
 typedef enum{
     seed=0,
@@ -178,6 +188,13 @@ typedef enum{
     harvest=2,
     cut=3
 } playermode;
+typedef enum{
+    gameloading=0,
+    gameruning=1,
+    gameover=2
+} game1_state;
+
+static game1_state gamestate = gameloading;
 //store every soil state in this array
 static soilstate farm[3][3]={0};
 //store every soil time in this array
@@ -204,14 +221,14 @@ static void lcdprint(void);
 static void buzzer_mode_sound(void);
 static void buzzer_error_sound(void);
 static void show_lefttime(void);
-static int get_time_left_second(void);
+static int get_time_left(void);
 static void red_led_on(void);
 static void red_led_off(void);
 static void red_led_blink(void);
 MenuState Game1_Run(void) {
     // Optional: startup sound
-    buzzer_tone(&buzzer_cfg, BUZZER_STARTUP_FREQ_HZ, BUZZER_STARTUP_DURATION_MS);
-    HAL_Delay(BUZZER_STARTUP_DELAY_MS);
+    buzzer_tone(&buzzer_cfg, Buzzer_startup_freq, Buzzer_startup_volume);
+    HAL_Delay(Buzzer_startup_delay);
     buzzer_off(&buzzer_cfg);
 //    /* Initialize peripherals */
 PWM_Init(&pwm_cfg); 
@@ -220,7 +237,7 @@ PWM_Init(&pwm_cfg_2);
 PWM_SetFreq(&pwm_cfg_2, 1000);
 last_move_tick = HAL_GetTick();
 Input_Init();
-new_game_startloading(); 
+gamestate = gameloading;
 printf("Game start running\r\n");
 
 
@@ -228,17 +245,23 @@ printf("Game start running\r\n");
 
     // Game loop
     while (1) {
-
-        while(!game_over){
 uint32_t frame_start = HAL_GetTick();
+// Use switch-case to change differentt game states
+//instead of game_over to decide which game states
 
+        switch (gamestate){
+
+            case gameloading :
+            new_game_startloading();
+            gamestate = gameruning;
+            break;
+
+            case gameruning:
         // Step 1: Read input
         Input_Read();
         Joystick_Read(&joystick_cfg, &joystick_data);
 
-
-
-        // Step 2: Check exit or rest game
+          // Step 2: Check exit or rest game
         if (current_input.btn6_pressed) {
             check_screen_updata= 1;
             PWM_SetDuty(&pwm_cfg, 0);
@@ -248,55 +271,54 @@ uint32_t frame_start = HAL_GetTick();
             exit_state = MENU_STATE_HOME;
             return exit_state;
        }
+
        if (current_input.btn7_pressed) {
         check_screen_updata= 1;
         Init_game_value();
         Init_game_screen();
+        gamestate = gameruning;
         printf("BTN7 reset pressed\r\n");
         buzzer_mode_sound();
        
        }
-   else{handle_input_data();
+          else{handle_input_data();
         // Step 3: UPDATE
         // update soilstate ,score,,red and green led
   
         update_game();
 
-        int time_left_now = get_time_left_second();
+        int time_left_now = get_time_left();
         if (time_left_now != last_time_left) {
             last_time_left = time_left_now;
             check_screen_updata= 1;
         }
 
-        if(error_message != NULL && HAL_GetTick() - error_stick >= ERROR_MESSAGE_TIME_MS) {
+        if(error_message != NULL && HAL_GetTick() - error_stick >= Error_message_time) {
             error_message = NULL;
             check_screen_updata= 1;
         }
 
         // Step 4: RENDER
          // if  check_screen_updata = 1 means the screen need update
-        if (check_screen_updata) {
+        if (check_screen_updata && gamestate == gameruning) {
             render_game();
             check_screen_updata = 0;
         }
-        
     
     }
+            break;
 
-
-        // Frame timing
-        uint32_t frame_time = HAL_GetTick() - frame_start;
-        if (frame_time < GAME1_FRAME_TIME_MS) {
-            HAL_Delay(GAME1_FRAME_TIME_MS - frame_time);
-        
-    }
-}
-//Updata the best score
+            case gameover:
+            {
         if (score > best_score) {best_score = score;
             printf(" The best score = %d\r\n", best_score);
             
         
         }
+        //close all pwm and buzzer
+PWM_SetDuty(&pwm_cfg, 0);
+PWM_SetDuty(&pwm_cfg_2, 0);
+buzzer_off(&buzzer_cfg);
         LCD_Fill_Buffer(0);
         LCD_printString("GAME OVER", 20, 50, 2, 4);
 
@@ -311,7 +333,7 @@ uint32_t frame_start = HAL_GetTick();
         LCD_printString("Press BTN6 back to MENU", 20, 195, 1, 1);
         LCD_Refresh(&cfg0);
 //choose reset or back to main menu
-        while(game_over){
+        while(gamestate == gameover){
             Input_Read();
 
             if (current_input.btn6_pressed) {
@@ -328,15 +350,32 @@ uint32_t frame_start = HAL_GetTick();
                 check_screen_updata= 1;
                 Init_game_value();
                 Init_game_screen();
+                gamestate = gameruning;
                 buzzer_mode_sound();
                 printf("Press BTN7 restart game\r\n");
                 break;
             }
         }
+            }
+            break;
+
+            default:
+                gamestate = gameloading;
+                break;
 }
+
+        // Frame timing
+        uint32_t frame_time = HAL_GetTick() - frame_start;
+        if (frame_time < Game1_frame_time) {
+            HAL_Delay(Game1_frame_time - frame_time);
+        
+    }
+}
+
 
     return exit_state;
 }
+
 // ===== UPDATE & RENDER FUNCTIONS =====
 //crate a loading animation
 static void loading_animation(void)
@@ -367,7 +406,7 @@ static void loading_animation(void)
         LCD_Refresh(&cfg0);
         printf("Loading... %d%%\n", loading);
 
-        HAL_Delay(LOADING_DELAY_MS);
+        HAL_Delay(Loading_delay);
     }
 }
 //Generate the corresponding sprite depend on different soil states.
@@ -378,12 +417,7 @@ static void soil_generated(void)
             int x=start_x+ c * (edge+gap);
         int y=start_y+ r * (edge+gap);
 
-        if (farm[r][c]==soil) {LCD_Draw_Sprite_Scaled(x,y, 10, 10, (uint8_t*)Soil,scale);}
-        else if (farm[r][c]==seeded) {LCD_Draw_Sprite_Scaled(x,y, 10, 10, (uint8_t*)Soil_seeded,scale);}
-        else if (farm[r][c]==waterd) {LCD_Draw_Sprite_Scaled(x,y, 10, 10, (uint8_t*)Soil_waterd,scale);}
-        else if (farm[r][c]==ripe) {LCD_Draw_Sprite_Scaled(x,y, 10, 10, (uint8_t*)Soil_ripe,scale);}
-        else if (farm[r][c]==growing){LCD_Draw_Sprite_Scaled(x,y, 10, 10, (uint8_t*)Soil_growing,scale);}
-        else if (farm[r][c]==sapless) {LCD_Draw_Sprite_Scaled(x,y, 10, 10, (uint8_t*)Soil_sapless,scale);}
+LCD_Draw_Sprite_Scaled(x,y,10,10,(uint8_t*)soil_sprites[farm[r][c]],scale);
 
        }
     
@@ -426,7 +460,7 @@ static void showcurrentmode(void){
     {LCD_printString("MODE: SEED", 10, 10, 1, 2);}
     else if (defalutmode == water)
     {LCD_printString("MODE: WATER", 10, 10, 1, 2);}
-    else if (defalutmode==harvest) {LCD_printString("MODE: Harvest", 10, 10, 1, 2);}
+    else if (defalutmode==harvest) {LCD_printString("MODE:Harvest", 10, 10, 1, 2);}
     else if (defalutmode==cut) {LCD_printString("MODE: cut", 10, 10, 1, 2);}
 }
 //showing current score in lcd
@@ -437,11 +471,11 @@ static void showscore(void){
     LCD_printString(scorestr, 10, 40, 3, 2);
 }
 //Display left time in this round
-static int get_time_left_second(void){
-    uint32_t elapsed = HAL_GetTick() - game_start_tick;
+static int get_time_left(void){
+    uint32_t past = HAL_GetTick() - game_start_tick;
 
-    if (elapsed < game_time) {
-        return (game_time - elapsed) / 1000;
+    if (past < game_time) {
+        return (game_time - past) / 1000;
     }
     else {
         return 0;
@@ -449,7 +483,7 @@ static int get_time_left_second(void){
 }
 static void show_lefttime(void){
     char time[20];
-    int time_left = get_time_left_second();
+    int time_left = get_time_left();
 
     LCD_Draw_Rect(150, 0, 70, 30, 0, 1);
     sprintf(time, "TIME:%d", time_left);
@@ -467,11 +501,11 @@ static void red_led_off(void){
 static void red_led_blink(void){
         static uint32_t last_blink = 0;
         static int red_led_on_flag = 0;
-        uint32_t now = HAL_GetTick();
+        uint32_t now_tick = g_tim6_ticks;
 
 
-        if (now - last_blink >= RED_LED_BLINK_TIME_MS) {
-            last_blink = now;
+        if (now_tick - last_blink >= Red_led_blink_time / 10) {
+            last_blink = now_tick;
 
             if (red_led_on_flag == 0) {
                 red_led_on_flag = 1;
@@ -523,6 +557,7 @@ static void show_ripestate(void)
 }
 //Init lcd screen
 static void Init_game_screen(void){
+    LCD_Fill_Buffer(0);
     soil_generated();
     showcurrentmode();
     showscore();
@@ -537,7 +572,7 @@ static void Init_game_value(void){
     initial_selectedcol=0;
     initial_selectedrow=0;
     defalutmode=seed;
-    game_over = 0;
+    gamestate=gameruning;
     error_message = NULL;
     error_stick = 0;
     last_move_tick = HAL_GetTick();
@@ -565,7 +600,7 @@ static void show_errormessage(const char *error)
 //print error message on lcd
 static void lcdprint(void){
     
-     if(error_message != NULL && HAL_GetTick() - error_stick < ERROR_MESSAGE_TIME_MS)
+     if(error_message != NULL && HAL_GetTick() - error_stick < Error_message_time)
           {LCD_Draw_Rect(0, 210, 240, 30, 0, 1);
             LCD_printString(error_message, 5, 220, 5, 1);}
         }
@@ -590,95 +625,126 @@ static void handle_input_botton_action(void){
 
     int seededr = initial_selectedrow + 1;
     int seededc = initial_selectedcol + 1;
+    if (!current_input.btn3_pressed) {
+        return;
+    }
+    check_screen_updata = 1;//To make sure updata screen
+    soilstate current_state = farm[seededr][seededc];
+    uint32_t now = HAL_GetTick();
+    const char *error = NULL;
+
+    switch (defalutmode) {
+
+        case seed:
+            if (current_state == soil) {
+                farm[seededr][seededc] = seeded;
+                farmtime[seededr][seededc] = now;
+                printf("The soil(%d,%d) has been seeded\r\n", seededr, seededc);
+                show_errormessage(NULL);
+                buzzer_mode_sound();
+            }
+            else if (current_state == ripe) {
+                error = "using harvest mode";
+            }
+            else if (current_state == sapless) {
+                error = "Using cut mode";
+            }
+            else {
+                error = "Already planted";
+            }
+            break;
+
+        case water:
+            if (current_state == seeded) {
+                farm[seededr][seededc] = waterd;
+                farmtime[seededr][seededc] = now;
+
+                printf("The soil(%d,%d) has been watered\r\n", seededr, seededc);
+                show_errormessage(NULL);
+                buzzer_mode_sound();
+            }
+            else if (current_state == soil) {
+                error = "Using seed mode";
+            }
+            else if (current_state == ripe) {
+                error = "using harvest mode";
+            }
+            else if (current_state == sapless) {
+                error = "Using cut mode";
+            }
+            else {
+                error = "Already planted";
+            }
+            break;
+
+        case harvest:
+            if (current_state == ripe) {
+                farm[seededr][seededc] = soil;
+                farmtime[seededr][seededc] = 0;
+                score++;
+
+                printf("The soil(%d,%d) has been harvested\r\n", seededr, seededc);
+                printf("score + 1, the current score is %d\r\n", score);
+
+                show_errormessage(NULL);
+                buzzer_mode_sound();
+            }
+            else if (current_state == seeded) {
+                error = "using water mode";
+            }
+            else if (current_state == waterd || current_state == growing) {
+                error = "wait ripe";
+            }
+            else if (current_state == sapless) {
+                error = "Using cut mode";
+            }
+            else {
+                error = "Nothing to harvest";
+            }
+            break;
 
 
-    if (current_input.btn3_pressed)
-        { check_screen_updata= 1;
-          if (defalutmode==seed&& farm[seededr][seededc]==soil)  {
-            farm[seededr][seededc] = seeded;
-            printf("The soil(%d,%d) has been seeded\r\n",seededr, seededc);
-            farmtime[seededr][seededc] = HAL_GetTick();
+
+            case cut:
+            if (current_state == soil) {
+                error = "The soil is empty ";
+            }
+            else {
+            farm[seededr][seededc] = soil;
+            farmtime[seededr][seededc] = 0;
+
+            printf("The soil(%d,%d) has been cut\r\n", seededr, seededc);
+
             show_errormessage(NULL);
             buzzer_mode_sound();
             }
-            else if (defalutmode==cut) {
-                farm[seededr][seededc] = soil;
-                show_errormessage(NULL);
-                printf("The soil(%d,%d) has been cut\r\n",seededr, seededc);
-                farmtime[seededr][seededc] = 0;
-                buzzer_mode_sound(); 
-            }
-            else if (defalutmode==water&& farm[seededr][seededc] == seeded) {
-                farm[seededr][seededc] = waterd;
-                printf("The soil(%d,%d) has been watered\r\n",seededr, seededc);
-                farmtime[seededr][seededc] = HAL_GetTick(); 
-            show_errormessage(NULL);
-            buzzer_mode_sound();}
-            else if (defalutmode==harvest && farm[seededr][seededc] == ripe) {
-            farm[seededr][seededc] = soil;
-            score++;
-            farmtime[seededr][seededc] = 0;
-            printf("The soil(%d,%d) has been harvested\r\n",seededr, seededc);
-            printf("score + 1, the current score is %d\r\n",score);
-            buzzer_mode_sound(); 
-            show_errormessage(NULL);}
-            else{if (defalutmode==seed&& farm[seededr][seededc]==seeded) {
-            show_errormessage("Already planted");
-            printf("error\r\n");
-            buzzer_error_sound();
-            
-            }
-            else if (defalutmode==seed&& farm[seededr][seededc]==waterd) {
-            show_errormessage("Already planted");
-            printf("error\r\n");
-            buzzer_error_sound();}
-            else if (defalutmode==seed&& farm[seededr][seededc]==ripe) {
-            show_errormessage("using harvest mode");
-            printf("error\r\n");
-            buzzer_error_sound();}
-            else if (defalutmode==water&& farm[seededr][seededc]==ripe) {
-            show_errormessage("using harvest mode");
-            printf("error\r\n");
-            buzzer_error_sound();}
-            else if (defalutmode==water&& farm[seededr][seededc]==waterd) {
-            show_errormessage("Already planted");
-            printf("error\r\n");
-            buzzer_error_sound();}
-            else if (defalutmode==water&& farm[seededr][seededc]==soil) {
-            show_errormessage("Using seed mode");
-            printf("error\r\n");
-            buzzer_error_sound();}
-            else if (defalutmode==harvest&& farm[seededr][seededc]==seeded) {
-            show_errormessage("using water mode");
-            printf("error\r\n");
-            buzzer_error_sound();}
-            else if (defalutmode==harvest&& farm[seededr][seededc]==waterd) {
-            show_errormessage("wait ripe");
-            printf("error\r\n");
-            buzzer_error_sound();}
-            else if (defalutmode==harvest&& farm[seededr][seededc]==growing) {
-            show_errormessage("wait ripe");
-            printf("error\r\n");
-            buzzer_error_sound();}
-            else if (defalutmode==seed&& farm[seededr][seededc]==sapless) {
-            show_errormessage("Using cut mode");
-            printf("error\r\n");
-            buzzer_error_sound();}
-            else if (defalutmode==water&& farm[seededr][seededc]==sapless) {
-            show_errormessage("Using cut mode");
-            printf("error\r\n");
-            buzzer_error_sound();}
-            else if (defalutmode==harvest&& farm[seededr][seededc]==sapless) {
-            show_errormessage("Using cut mode");
-            printf("error\r\n");
-           buzzer_error_sound();}
+
+            break;
+
+        default:
+            error = "Invalid mode";
+            break;
         }
+    if (error != NULL) {
+        show_errormessage(error);
+        printf("error\r\n");
+        buzzer_error_sound();
     }
 }
+
+
+    
 //handle joystick data
 static void handle_input_joystick(void){
  uint32_t now = HAL_GetTick();
-        if ((now - last_move_tick) >= MOVE_DELAY_MS && joystick_data.direction != CENTRE){
+
+ uint32_t move_delay = Move_delay;
+ if (joystick_data.magnitude > 0.75f) {
+ move_delay = 100;
+ }
+  else if (joystick_data.magnitude > 0.45f) {
+        move_delay = 160;}
+        if ((now - last_move_tick) >= move_delay && joystick_data.direction != CENTRE){
             int prev_col = initial_selectedcol;
             int prev_row = initial_selectedrow;
               switch (joystick_data.direction)
@@ -694,10 +760,10 @@ static void handle_input_joystick(void){
         default: break;
       }
       printf("dir = %d\r\n", joystick_data.direction);
-    if (initial_selectedrow <= -1) initial_selectedrow = -1;
-    if (initial_selectedrow >=1) initial_selectedrow = 1;
-    if (initial_selectedcol <= -1) initial_selectedcol = -1;
-    if (initial_selectedcol >=1 ) initial_selectedcol = 1;
+    if (initial_selectedrow < -1) initial_selectedrow = -1;
+    if (initial_selectedrow > 1) initial_selectedrow = 1;
+    if (initial_selectedcol <  -1) initial_selectedcol = -1;
+    if (initial_selectedcol > 1 ) initial_selectedcol = 1;
     if (prev_col != initial_selectedcol|| prev_row != initial_selectedrow)
     {recover_selectblokcs(prev_row, prev_col);
     check_screen_updata= 1;}
@@ -720,25 +786,25 @@ uint32_t now = HAL_GetTick();
             for(int c=0; c<col; c++){
 
                 if(farm[r][c]==waterd){
-                    if (now - farmtime[r][c] >= WATER_TO_GROWING_TIME_MS) {
+                    if (now - farmtime[r][c] >= Water_to_growing_time) {
                         farm[r][c]=growing;
                         check_screen_updata= 1;
                         farmtime[r][c]=now;}}
 
                 if(farm[r][c]==growing){
-                    if (now - farmtime[r][c] >= GROWING_TO_RIPE_TIME_MS) {
+                    if (now - farmtime[r][c] >= Growing_to_ripe_time) {
                         printf("The soil(%d,%d) has matured\r\n", r, c);
                         farm[r][c]=ripe;
                         check_screen_updata= 1;}}
 
                 if(farm[r][c]==seeded){
-                    if(now - farmtime[r][c] >= SEEDED_TO_SAPLESS_TIME_MS){
+                    if(now - farmtime[r][c] >= Seeded_to_sapless_time){
                         farm[r][c]=sapless;
                         check_screen_updata= 1;
                         printf("The soil(%d,%d) has become sapless\r\n", r, c);
                     }}}}
                         if (HAL_GetTick() - game_start_tick >= game_time) {
-                            game_over =1;
+                            gamestate=gameover;
                             check_screen_updata= 1;
                             printf("Game over. Final score = %d\r\n", score);
         }
@@ -746,7 +812,7 @@ uint32_t now = HAL_GetTick();
 //Re-render the screen
 static void render_game(void)
 
-{   LCD_Fill_Buffer(0);
+{  LCD_Fill_Buffer(0);
     soil_generated();
 showcurrentmode();
 showscore();
@@ -758,13 +824,13 @@ LCD_Refresh(&cfg0);
 }
 //buzzer sound 1
 static void buzzer_mode_sound(void)
-{ buzzer_tone(&buzzer_cfg, BUZZER_MODE_FREQ_HZ, BUZZER_MODE_DURATION_MS);
-    HAL_Delay(BUZZER_MODE_DELAY_MS);
+{ buzzer_tone(&buzzer_cfg, Buzzer_mode_freq, Buzzer_mode_volume);
+    HAL_Delay(Buzzer_mode_delay);
     buzzer_off(&buzzer_cfg);
 }
 //buzzer sound 2
 static void buzzer_error_sound(void)
-{buzzer_tone(&buzzer_cfg, BUZZER_ERROR_FREQ_HZ, BUZZER_ERROR_DURATION_MS);
-    HAL_Delay(BUZZER_ERROR_DELAY_MS);
+{buzzer_tone(&buzzer_cfg, Buzzer_error_freq, Buzzer_error_volume);
+    HAL_Delay(Buzzer_error_delay);
     buzzer_off(&buzzer_cfg);
 }
